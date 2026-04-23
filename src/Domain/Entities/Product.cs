@@ -9,9 +9,9 @@ namespace Domain.Entities
         public Guid Id { get; set; }
 
         [Required]
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
 
-        public string Description { get; set; }
+        public string Description { get; set; } = string.Empty;
 
         public decimal Price { get; set; }
 
@@ -20,6 +20,6 @@ namespace Domain.Entities
 
         // Concurrency token for optimistic concurrency fallback
         [Timestamp]
-        public byte[] RowVersion { get; set; }
+        public byte[]? RowVersion { get; set; }
     }
 }

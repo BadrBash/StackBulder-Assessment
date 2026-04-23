@@ -26,7 +26,7 @@ namespace Infrastructure.Services
             _logger = logger;
         }
 
-        public async Task<(bool Success, string Error, Guid? OrderId)> PlaceOrderAsync(OrderRequest request, string idempotencyKey, CancellationToken ct = default)
+        public async Task<(bool Success, string? Error, Guid? OrderId)> PlaceOrderAsync(OrderRequest request, string? idempotencyKey, CancellationToken ct = default)
         {
             // Idempotency check
             var existing = await _orders.GetByIdempotencyKeyAsync(idempotencyKey, ct);
@@ -44,7 +44,7 @@ namespace Infrastructure.Services
                     _logger.LogWarning(ex, "Transient error in PlaceOrderAsync, retrying in {Delay}", ts);
                 });
 
-            (bool Success, string Error, Guid? OrderId) result = (false, "Unknown", null);
+            (bool Success, string? Error, Guid? OrderId) result = (false, "Unknown", null);
 
             await policy.ExecuteAsync(async (Polly.Context _pollyCtx, CancellationToken ctPolicy) =>
             {
@@ -107,7 +107,26 @@ namespace Infrastructure.Services
 
                 await tx.CommitAsync(ctPolicy);
 
-                // Publish domain event after commit
+                // Persist event to outbox for reliable delivery
+                try
+                {
+                    var outbox = new Infrastructure.Outbox.OutboxMessage
+                    {
+                        Id = Guid.NewGuid(),
+                        Type = nameof(Infrastructure.Events.OrderPlaced),
+                        Payload = System.Text.Json.JsonSerializer.Serialize(new Infrastructure.Events.OrderPlaced { OrderId = order.Id, Total = order.Total })
+                    };
+                    var scope = _db.Database.GetDbConnection();
+                    // Use repository to persist outbox message
+                    var outboxRepo = new Outbox.OutboxRepository(_db);
+                    await outboxRepo.AddAsync(outbox, ctPolicy);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to persist outbox message for order {OrderId}", order.Id);
+                }
+
+                // Also publish to in-memory bus for immediate in-process handling (optional)
                 await _events.PublishAsync(new Infrastructure.Events.OrderPlaced { OrderId = order.Id, Total = order.Total }, ctPolicy);
 
                 result = (true, null, order.Id);

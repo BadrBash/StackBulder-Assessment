@@ -4,6 +4,8 @@ namespace Infrastructure.Eventing
     {
         private readonly Dictionary<Type, List<Func<object, CancellationToken, Task>>> _handlers = new();
 
+        // Outbox integration point: a durable OutboxPublisher can subscribe here to forward events to persistent storage.
+
         public void Subscribe<T>(Func<T, CancellationToken, Task> handler) where T : class
         {
             var t = typeof(T);

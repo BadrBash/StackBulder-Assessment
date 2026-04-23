@@ -30,15 +30,18 @@ Log.Logger = loggerConfig.CreateLogger();
 builder.Host.UseSerilog();
 
 
-// Configuration - use SQLite file-based DB
-var connection = builder.Configuration.GetConnectionString("Default") ?? "Data Source=orders.db";
+// Configuration - use PostgreSQL by default (override via ConnectionStrings:Default)
+var connection = builder.Configuration.GetConnectionString("Default") ?? "Host=localhost;Port=5432;Database=Stackbuld_DB;Username=postgres;Password2809";
 
 // Add services
 builder.Services.AddDbContext<OrderDbContext>(opts =>
-    opts.UseSqlite(connection));
+    opts.UseNpgsql(connection));
 
 builder.Services.AddScoped<IProductRepository, ProductRepository>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
+// Outbox repository and publisher
+builder.Services.AddScoped<Infrastructure.Outbox.IOutboxRepository, Infrastructure.Outbox.OutboxRepository>();
+builder.Services.AddHostedService<Infrastructure.Outbox.OutboxPublisher>();
 
 // Use in-memory event bus for local demo
 builder.Services.AddSingleton<IEventBus, Infrastructure.Eventing.InMemoryEventBus>();
@@ -69,20 +72,27 @@ app.MapPost("/api/orders", async ([FromServices] IOrderService svc, [FromBody] A
     return Results.Created($"/api/orders/{orderId}", new { orderId });
 });
 
+// GET products for discovery/testing
+app.MapGet("/api/products", async ([FromServices] OrderDbContext db) =>
+{
+    var products = await db.Products.Select(p => new { p.Id, p.Name, p.Description, p.Price, p.Stock }).ToListAsync();
+    return Results.Ok(products);
+});
+
 // Seed sample products
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
     try
     {
-        // For local demo use EnsureCreated to create tables from the model if migrations are not present
+        // Ensure database is created. For Postgres use migrations in production.
         db.Database.EnsureCreated();
 
         if (!db.Products.Any())
         {
             db.Products.AddRange(new[] {
-                new Domain.Entities.Product { Id = Guid.NewGuid(), Name = "Widget A", Price = 9.99m, Stock = 100 },
-                new Domain.Entities.Product { Id = Guid.NewGuid(), Name = "Widget B", Price = 19.99m, Stock = 50 }
+                new Domain.Entities.Product { Id = Guid.NewGuid(), Name = "Widget A", Description = "Basic widget A", Price = 9.99m, Stock = 100 },
+                new Domain.Entities.Product { Id = Guid.NewGuid(), Name = "Widget B", Description = "Premium widget B", Price = 19.99m, Stock = 50 }
             });
             db.SaveChanges();
         }

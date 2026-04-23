@@ -9,14 +9,14 @@ namespace Domain.Entities
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-        public string CustomerEmail { get; set; }
+        public string CustomerEmail { get; set; } = string.Empty;
 
         public List<OrderItem> Items { get; set; } = new List<OrderItem>();
 
         public decimal Total { get; set; }
 
         // Idempotency key (optional) to prevent duplicate orders
-        public string IdempotencyKey { get; set; }
+        public string? IdempotencyKey { get; set; }
 
         public string Status { get; set; } = "Pending";
     }

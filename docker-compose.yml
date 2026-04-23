@@ -5,9 +5,23 @@ services:
       context: .
       dockerfile: src/API/Dockerfile
     environment:
-      - ConnectionStrings__Default=Data Source=orders.db
+      - ConnectionStrings__Default=Host=postgres;Port=5432;Database=Stackbuld_DB;Username=postgres;Password=2809
       - Serilog__ElasticsearchUri=http://elasticsearch:9200
+    depends_on:
+      - postgres
     ports:
       - "5000:80"
 
-volumes: {}
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=Stackbuld_DB
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=2809
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+volumes:
+  pgdata:
+    driver: local

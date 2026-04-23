@@ -9,12 +9,12 @@ namespace Infrastructure.Repositories
 
         public ProductRepository(OrderDbContext db) => _db = db;
 
-        public async Task<Product> GetByIdAsync(Guid id, CancellationToken ct = default)
+        public async Task<Product?> GetByIdAsync(Guid id, CancellationToken ct = default)
         {
             return await _db.Products.FirstOrDefaultAsync(p => p.Id == id, ct);
         }
 
-        public async Task<Product> GetByIdForUpdateAsync(Guid id, CancellationToken ct = default)
+        public async Task<Product?> GetByIdForUpdateAsync(Guid id, CancellationToken ct = default)
         {
             // Try provider-specific row lock (Postgres: FOR UPDATE). Falls back to normal query.
             try

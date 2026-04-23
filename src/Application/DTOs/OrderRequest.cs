@@ -8,7 +8,7 @@ namespace Application.DTOs
 
     public class OrderRequest
     {
-        public string CustomerEmail { get; set; }
+        public string CustomerEmail { get; set; } = string.Empty;
         public List<OrderItemRequest> Items { get; set; } = new List<OrderItemRequest>();
     }
 }
