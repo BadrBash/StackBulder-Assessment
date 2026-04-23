@@ -1,5 +1,6 @@
 using Infrastructure.Eventing;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Infrastructure.HostedServices
 {

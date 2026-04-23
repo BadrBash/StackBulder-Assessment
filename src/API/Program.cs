@@ -6,19 +6,44 @@ using Infrastructure.HostedServices;
 using Infrastructure.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configuration
-var connection = builder.Configuration.GetConnectionString("Default") ?? "Host=localhost;Database=orders;Username=postgres;Password=postgres";
+// Serilog configuration
+var loggerConfig = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.Console();
+
+var elasticUri = builder.Configuration["Serilog:ElasticsearchUri"];
+if (!string.IsNullOrWhiteSpace(elasticUri))
+{
+    loggerConfig = loggerConfig.WriteTo.Elasticsearch(new Serilog.Sinks.Elasticsearch.ElasticsearchSinkOptions(new Uri(elasticUri))
+    {
+        AutoRegisterTemplate = true,
+        IndexFormat = "order-api-{0:yyyy.MM.dd}"
+    });
+}
+
+Log.Logger = loggerConfig.CreateLogger();
+builder.Host.UseSerilog();
+
+
+// Configuration - use SQLite file-based DB
+var connection = builder.Configuration.GetConnectionString("Default") ?? "Data Source=orders.db";
 
 // Add services
 builder.Services.AddDbContext<OrderDbContext>(opts =>
-    opts.UseNpgsql(connection));
+    opts.UseSqlite(connection));
 
 builder.Services.AddScoped<IProductRepository, ProductRepository>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
-builder.Services.AddSingleton<IEventBus, InMemoryEventBus>();
+
+// Use in-memory event bus for local demo
+builder.Services.AddSingleton<IEventBus, Infrastructure.Eventing.InMemoryEventBus>();
+
+// Register background workers
 builder.Services.AddHostedService<OrderBackgroundProcessor>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 
@@ -48,14 +73,23 @@ app.MapPost("/api/orders", async ([FromServices] IOrderService svc, [FromBody] A
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
-    db.Database.Migrate();
-    if (!db.Products.Any())
+    try
     {
-        db.Products.AddRange(new[] {
-            new Domain.Entities.Product { Id = Guid.NewGuid(), Name = "Widget A", Price = 9.99m, Stock = 100 },
-            new Domain.Entities.Product { Id = Guid.NewGuid(), Name = "Widget B", Price = 19.99m, Stock = 50 }
-        });
-        db.SaveChanges();
+        // For local demo use EnsureCreated to create tables from the model if migrations are not present
+        db.Database.EnsureCreated();
+
+        if (!db.Products.Any())
+        {
+            db.Products.AddRange(new[] {
+                new Domain.Entities.Product { Id = Guid.NewGuid(), Name = "Widget A", Price = 9.99m, Stock = 100 },
+                new Domain.Entities.Product { Id = Guid.NewGuid(), Name = "Widget B", Price = 19.99m, Stock = 50 }
+            });
+            db.SaveChanges();
+        }
+    }
+    catch (Exception ex)
+    {
+        Log.Logger.Error(ex, "Error ensuring database is created or seeding data");
     }
 }
 

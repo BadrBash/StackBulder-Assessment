@@ -3,6 +3,9 @@ using Application.Interfaces;
 using Domain.Entities;
 using Infrastructure.Eventing;
 using Infrastructure.Repositories;
+using Polly;
+using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore;
 
 namespace Infrastructure.Services
 {
@@ -25,6 +28,7 @@ namespace Infrastructure.Services
 
         public async Task<(bool Success, string Error, Guid? OrderId)> PlaceOrderAsync(OrderRequest request, string idempotencyKey, CancellationToken ct = default)
         {
+            // Idempotency check
             var existing = await _orders.GetByIdempotencyKeyAsync(idempotencyKey, ct);
             if (existing != null)
             {
@@ -32,59 +36,84 @@ namespace Infrastructure.Services
                 return (true, null, existing.Id);
             }
 
-            await using var tx = await _db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
-
-            var productMap = new Dictionary<Guid, Product>();
-            foreach (var item in request.Items)
-            {
-                var product = await _products.GetByIdForUpdateAsync(item.ProductId, ct);
-                if (product == null)
+            // Retry policy for transient concurrency issues
+            var policy = Policy
+                .Handle<DbUpdateConcurrencyException>()
+                .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromMilliseconds(200 * Math.Pow(2, retryAttempt)), (ex, ts) =>
                 {
-                    await tx.RollbackAsync(ct);
-                    return (false, $"Product {item.ProductId} not found", null);
+                    _logger.LogWarning(ex, "Transient error in PlaceOrderAsync, retrying in {Delay}", ts);
+                });
+
+            (bool Success, string Error, Guid? OrderId) result = (false, "Unknown", null);
+
+            await policy.ExecuteAsync(async (Polly.Context _pollyCtx, CancellationToken ctPolicy) =>
+            {
+                // Ensure serializable isolation for this transaction where possible
+                try
+                {
+                    await _db.Database.ExecuteSqlRawAsync("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;", ctPolicy);
                 }
-                productMap[item.ProductId] = product;
-            }
+                catch { }
 
-            foreach (var item in request.Items)
-            {
-                var p = productMap[item.ProductId];
-                if (p.Stock < item.Quantity)
+                await using var tx = await _db.Database.BeginTransactionAsync(ctPolicy);
+
+                var productMap = new Dictionary<Guid, Product>();
+                foreach (var item in request.Items)
                 {
-                    await tx.RollbackAsync(ct);
-                    return (false, $"Insufficient stock for product {p.Id}", null);
+                    var product = await _products.GetByIdForUpdateAsync(item.ProductId, ctPolicy);
+                    if (product == null)
+                    {
+                        await tx.RollbackAsync(ctPolicy);
+                        result = (false, $"Product {item.ProductId} not found", null);
+                        return;
+                    }
+                    productMap[item.ProductId] = product;
                 }
-            }
 
-            var order = new Order { Id = Guid.NewGuid(), CustomerEmail = request.CustomerEmail, IdempotencyKey = idempotencyKey };
-            decimal total = 0;
-            foreach (var item in request.Items)
-            {
-                var p = productMap[item.ProductId];
-                p.Stock -= item.Quantity;
-                var oi = new OrderItem
+                foreach (var item in request.Items)
                 {
-                    Id = Guid.NewGuid(),
-                    ProductId = p.Id,
-                    ProductName = p.Name,
-                    Quantity = item.Quantity,
-                    UnitPrice = p.Price,
-                    OrderId = order.Id
-                };
-                order.Items.Add(oi);
-                total += p.Price * item.Quantity;
-                _db.Products.Update(p);
-            }
-            order.Total = total;
+                    var p = productMap[item.ProductId];
+                    if (p.Stock < item.Quantity)
+                    {
+                        await tx.RollbackAsync(ctPolicy);
+                        result = (false, $"Insufficient stock for product {p.Id}", null);
+                        return;
+                    }
+                }
 
-            await _db.Orders.AddAsync(order, ct);
-            await _db.SaveChangesAsync(ct);
+                var order = new Order { Id = Guid.NewGuid(), CustomerEmail = request.CustomerEmail, IdempotencyKey = idempotencyKey };
+                decimal total = 0;
+                foreach (var item in request.Items)
+                {
+                    var p = productMap[item.ProductId];
+                    p.Stock -= item.Quantity;
+                    var oi = new OrderItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ProductId = p.Id,
+                        ProductName = p.Name,
+                        Quantity = item.Quantity,
+                        UnitPrice = p.Price,
+                        OrderId = order.Id
+                    };
+                    order.Items.Add(oi);
+                    total += p.Price * item.Quantity;
+                    _db.Products.Update(p);
+                }
+                order.Total = total;
 
-            await tx.CommitAsync(ct);
+                await _db.Orders.AddAsync(order, ctPolicy);
+                await _db.SaveChangesAsync(ctPolicy);
 
-            await _events.PublishAsync(new Infrastructure.Events.OrderPlaced { OrderId = order.Id, Total = order.Total }, ct);
+                await tx.CommitAsync(ctPolicy);
 
-            return (true, null, order.Id);
+                // Publish domain event after commit
+                await _events.PublishAsync(new Infrastructure.Events.OrderPlaced { OrderId = order.Id, Total = order.Total }, ctPolicy);
+
+                result = (true, null, order.Id);
+                return;
+            }, new Polly.Context(), ct);
+            return result;
+        }
         }
     }
-}
