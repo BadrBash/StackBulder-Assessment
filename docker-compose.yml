@@ -9,6 +9,7 @@ services:
       - Serilog__ElasticsearchUri=http://elasticsearch:9200
     depends_on:
       - postgres
+      - elasticsearch
     ports:
       - "5000:80"
 
@@ -22,6 +23,15 @@ services:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+
 volumes:
   pgdata:
     driver: local

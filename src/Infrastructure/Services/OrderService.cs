@@ -28,14 +28,6 @@ namespace Infrastructure.Services
 
         public async Task<(bool Success, string? Error, Guid? OrderId)> PlaceOrderAsync(OrderRequest request, string? idempotencyKey, CancellationToken ct = default)
         {
-            // Idempotency check
-            var existing = await _orders.GetByIdempotencyKeyAsync(idempotencyKey, ct);
-            if (existing != null)
-            {
-                _logger.LogInformation("Idempotent request: returning existing order {OrderId}", existing.Id);
-                return (true, null, existing.Id);
-            }
-
             // Retry policy for transient concurrency issues
             var policy = Policy
                 .Handle<DbUpdateConcurrencyException>()
@@ -51,11 +43,28 @@ namespace Infrastructure.Services
                 // Ensure serializable isolation for this transaction where possible
                 try
                 {
-                    await _db.Database.ExecuteSqlRawAsync("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;", ctPolicy);
+                    var provider = _db.Database.ProviderName ?? string.Empty;
+                    if (provider.Contains("Npgsql"))
+                    {
+                        await _db.Database.ExecuteSqlRawAsync("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;", ctPolicy);
+                    }
                 }
                 catch { }
 
                 await using var tx = await _db.Database.BeginTransactionAsync(ctPolicy);
+
+                // Idempotency check inside transaction to prevent race conditions
+                if (!string.IsNullOrWhiteSpace(idempotencyKey))
+                {
+                    var existing = await _orders.GetByIdempotencyKeyAsync(idempotencyKey, ctPolicy);
+                    if (existing != null)
+                    {
+                        await tx.CommitAsync(ctPolicy);
+                        _logger.LogInformation("Idempotent request: returning existing order {OrderId}", existing.Id);
+                        result = (true, null, existing.Id);
+                        return;
+                    }
+                }
 
                 var productMap = new Dictionary<Guid, Product>();
                 foreach (var item in request.Items)
@@ -103,28 +112,18 @@ namespace Infrastructure.Services
                 order.Total = total;
 
                 await _db.Orders.AddAsync(order, ctPolicy);
+
+                // Persist event to outbox INSIDE the same transaction for reliable delivery
+                var outbox = new Infrastructure.Outbox.OutboxMessage
+                {
+                    Id = Guid.NewGuid(),
+                    Type = nameof(Infrastructure.Events.OrderPlaced),
+                    Payload = System.Text.Json.JsonSerializer.Serialize(new Infrastructure.Events.OrderPlaced { OrderId = order.Id, Total = order.Total })
+                };
+                _db.Set<Infrastructure.Outbox.OutboxMessage>().Add(outbox);
+
                 await _db.SaveChangesAsync(ctPolicy);
-
                 await tx.CommitAsync(ctPolicy);
-
-                // Persist event to outbox for reliable delivery
-                try
-                {
-                    var outbox = new Infrastructure.Outbox.OutboxMessage
-                    {
-                        Id = Guid.NewGuid(),
-                        Type = nameof(Infrastructure.Events.OrderPlaced),
-                        Payload = System.Text.Json.JsonSerializer.Serialize(new Infrastructure.Events.OrderPlaced { OrderId = order.Id, Total = order.Total })
-                    };
-                    var scope = _db.Database.GetDbConnection();
-                    // Use repository to persist outbox message
-                    var outboxRepo = new Outbox.OutboxRepository(_db);
-                    await outboxRepo.AddAsync(outbox, ctPolicy);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to persist outbox message for order {OrderId}", order.Id);
-                }
 
                 // Also publish to in-memory bus for immediate in-process handling (optional)
                 await _events.PublishAsync(new Infrastructure.Events.OrderPlaced { OrderId = order.Id, Total = order.Total }, ctPolicy);

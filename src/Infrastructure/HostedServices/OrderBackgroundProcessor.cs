@@ -34,6 +34,11 @@ namespace Infrastructure.HostedServices
                 await Task.Delay(200, ct);
                 _logger.LogInformation("Notification sent for {OrderId}", evt.OrderId);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Graceful shutdown, don't log as error
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing background event for {OrderId}", evt.OrderId);

@@ -31,7 +31,7 @@ builder.Host.UseSerilog();
 
 
 // Configuration - use PostgreSQL by default (override via ConnectionStrings:Default)
-var connection = builder.Configuration.GetConnectionString("Default") ?? "Host=localhost;Port=5432;Database=Stackbuld_DB;Username=postgres;Password2809";
+var connection = builder.Configuration.GetConnectionString("Default") ?? "Host=localhost;Port=5432;Database=Stackbuld_DB;Username=postgres;Password=2809";
 
 // Add services
 builder.Services.AddDbContext<OrderDbContext>(opts =>
@@ -54,6 +54,14 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Health checks
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<OrderDbContext>("database", tags: ["ready"]);
+
+// Global exception handler
+builder.Services.AddExceptionHandler<API.Middleware.GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -62,14 +70,57 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.MapGet("/health", () => Results.Ok(new { status = "Healthy" }));
+// Middleware pipeline
+app.UseMiddleware<API.Middleware.CorrelationIdMiddleware>();
+app.UseExceptionHandler();
+
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        var result = new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(e => new { name = e.Key, status = e.Value.Status.ToString(), exception = e.Value.Exception?.Message })
+        };
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(result);
+    }
+});
 
 app.MapPost("/api/orders", async ([FromServices] IOrderService svc, [FromBody] Application.DTOs.OrderRequest req, HttpRequest http) =>
 {
+    // Input validation
+    if (string.IsNullOrWhiteSpace(req.CustomerEmail) || !req.CustomerEmail.Contains('@'))
+        return Results.BadRequest(new { error = "A valid customer email is required." });
+    if (req.Items == null || req.Items.Count == 0)
+        return Results.BadRequest(new { error = "At least one item is required." });
+    foreach (var item in req.Items)
+    {
+        if (item.Quantity <= 0)
+            return Results.BadRequest(new { error = $"Quantity for product {item.ProductId} must be greater than 0." });
+    }
+
     var idempotencyKey = http.Headers.ContainsKey("Idempotency-Key") ? http.Headers["Idempotency-Key"].ToString() : null;
     var (success, error, orderId) = await svc.PlaceOrderAsync(req, idempotencyKey);
     if (!success) return Results.BadRequest(new { error });
     return Results.Created($"/api/orders/{orderId}", new { orderId });
+});
+
+// GET order by id
+app.MapGet("/api/orders/{id:guid}", async ([FromServices] IOrderRepository repo, Guid id) =>
+{
+    var order = await repo.GetByIdAsync(id);
+    if (order == null) return Results.NotFound();
+    return Results.Ok(new
+    {
+        order.Id,
+        order.CustomerEmail,
+        order.Total,
+        order.Status,
+        order.CreatedAt,
+        Items = order.Items.Select(i => new { i.ProductId, i.ProductName, i.Quantity, i.UnitPrice })
+    });
 });
 
 // GET products for discovery/testing

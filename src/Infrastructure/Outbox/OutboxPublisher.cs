@@ -45,18 +45,36 @@ namespace Infrastructure.Outbox
                                 }
                             }
                         }
+                        catch (OperationCanceledException)
+                        {
+                            // Graceful shutdown or cancellation during publish — rethrow to exit the loop
+                            throw;
+                        }
                         catch (Exception ex)
                         {
                             _logger.LogError(ex, "Failed to publish outbox message {Id}", msg.Id);
                         }
                     }
                 }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    // Graceful shutdown, don't log as error
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Outbox processing error");
                 }
 
-                await Task.Delay(1000, stoppingToken);
+                try
+                {
+                    await Task.Delay(1000, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    // Graceful shutdown
+                    throw;
+                }
             }
         }
     }

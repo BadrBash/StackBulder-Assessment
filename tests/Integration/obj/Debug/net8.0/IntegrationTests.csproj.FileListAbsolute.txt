@@ -532,3 +532,4 @@ C:\Users\User\Desktop\StackBulder Assessment\tests\Integration\obj\Debug\net8.0\
 C:\Users\User\Desktop\StackBulder Assessment\tests\Integration\obj\Debug\net8.0\IntegrationTests.pdb
 C:\Users\User\Desktop\StackBulder Assessment\tests\Integration\obj\Debug\net8.0\IntegrationTests.genruntimeconfig.cache
 C:\Users\User\Desktop\StackBulder Assessment\tests\Integration\obj\Debug\net8.0\ref\IntegrationTests.dll
+C:\Users\User\Desktop\StackBulder Assessment\tests\Integration\bin\Debug\net8.0\Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore.dll
