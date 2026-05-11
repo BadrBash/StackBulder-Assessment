@@ -18,7 +18,10 @@ namespace Integration.Tests
 
         public OrderConcurrencyTests(WebApplicationFactory<Program> factory)
         {
-            _factory = factory;
+            _factory = factory.WithWebHostBuilder(builder =>
+            {
+                builder.UseContentRoot(AppContext.BaseDirectory);
+            });
         }
 
         [Fact]
@@ -150,4 +153,3 @@ namespace Integration.Tests
         }
     }
 }
-
