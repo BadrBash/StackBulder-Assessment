@@ -12,11 +12,12 @@ using Xunit;
 
 namespace Integration.Tests
 {
-    public class OrderConcurrencyTests : IClassFixture<WebApplicationFactory<Program>>
+    // Use the custom factory to ensure platform-correct content root
+    public class OrderConcurrencyTests : IClassFixture<CustomWebApplicationFactory<Program>>
     {
-        private readonly WebApplicationFactory<Program> _factory;
+        private readonly CustomWebApplicationFactory<Program> _factory;
 
-        public OrderConcurrencyTests(WebApplicationFactory<Program> factory)
+        public OrderConcurrencyTests(CustomWebApplicationFactory<Program> factory)
         {
             _factory = factory;
         }
