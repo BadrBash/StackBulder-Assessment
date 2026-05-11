@@ -10,6 +10,9 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Set content root to current directory for cross-platform compatibility
+builder.Host.UseContentRoot(Directory.GetCurrentDirectory());
+
 // Serilog configuration
 var loggerConfig = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
